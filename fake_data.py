@@ -193,6 +193,6 @@ def main(duration=1*60*24, num_fakes=30, **kw):
 
     
 
-if __name__ == '__main__':
-    import fire
-    fire.Fire(main)
+#if __name__ == '__main__':
+ #   import fire
+  #  fire.Fire(main)
