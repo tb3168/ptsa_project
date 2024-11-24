@@ -15,6 +15,15 @@ import glob
 import ast
 import math
 from plotnine import *
+
+def wide_to_long(df,cols_to_keep, cols_to_expand):
+    df_exp = pd.DataFrame(df[cols_to_expand].to_list(),index = df.index)
+    df_exp["t_pct"] = df_exp.apply(lambda x: x["time"]/x["time"].max(), axis=1)
+    df_keep = df[cols_to_keep]
+    df_out = df_keep.join(df_exp).explode(["time","depth","t_pct"])
+    df_out = df_out.astype({"time":"int","depth":"float","t_pct":"float"})
+    return df_out 
+flood_df_long = wide_to_long(flood_df,["duration"],"signal")
 # =============================================================================
 # STEP 1: get raw signals for all the true floods
 # =============================================================================
@@ -28,7 +37,20 @@ suspect_floods = [4152648,2195521,8612524, 6101443, 7370250, 9364214, 4268458, 4
 # STEP 2: get durations of all floods rounded up to the nearest minute
 # =============================================================================
 flood_df.loc[:,"duration"] = flood_df.apply(lambda x: math.ceil(x["signal"]["time"][-1]/60),axis=1)
-flood_df = flood_df.drop(suspect_floods)
+#flood_df = flood_df.drop(suspect_floods)
+flood_df = flood_df.loc[flood_df.duration > 4] #drop floods with duration <= 4 because these are all blips and boxes
+#flood_df = flood_df.loc[flood_df.apply(lambda x: x["signal"]["depth"].max(),axis=1) > 30] #drop floods with max depth > 30 
+
+# =============================================================================
+# STEP 3: smooth floods and cut into rising/falling segments
+# =============================================================================
+x = flood_df.loc[4066145]
+uuid = x.name
+signal = pd.DataFrame(x.signal)
+std = np.std((signal["depth"] - signal["depth"].mean())/signal["depth"].max())*signal["depth"].max()
+smooth = signal.rolling(window=len(signal)//10, win_type="gaussian",center=True).mean(std=std)
+ggplot(signal,aes(x="time",y="depth")) + geom_line(alpha=0.6) + geom_line(smooth,aes(x="time",y="depth"),color="skyblue",alpha=0.9)
+
 # =============================================================================
 # STEP 3: remove outliers
 # =============================================================================
