@@ -23,33 +23,19 @@ def wide_to_long(df,cols_to_keep, cols_to_expand):
     df_out = df_keep.join(df_exp).explode(["time","depth","t_pct"])
     df_out = df_out.astype({"time":"int","depth":"float","t_pct":"float"})
     return df_out 
-flood_df_long = wide_to_long(flood_df,["duration"],"signal")
+flood_df_long = wide_to_long(flood_df,["duration","inflection_t"],"signal")
 # =============================================================================
 # STEP 1: get raw signals for all the true floods
 # =============================================================================
 event_df = pd.read_pickle('/Users/tanvibansal/Documents/GitHub/ptsa_project/event_df_tidy')
 flood_df = event_df.loc[event_df.label == "flood"]
-suspect_floods = [4152648,2195521,8612524, 6101443, 7370250, 9364214, 4268458, 4298728, 3606063,
-       3323611, 9829405, 3230015, 2860240, 5545019, 1929133, 1429885,
-       8159541, 4487869, 1466876, 1343346, 9641026,6678695]
 
 # =============================================================================
 # STEP 2: get durations of all floods rounded up to the nearest minute
 # =============================================================================
 flood_df.loc[:,"duration"] = flood_df.apply(lambda x: math.ceil(x["signal"]["time"][-1]/60),axis=1)
-#flood_df = flood_df.drop(suspect_floods)
 flood_df = flood_df.loc[flood_df.duration > 4] #drop floods with duration <= 4 because these are all blips and boxes
 #flood_df = flood_df.loc[flood_df.apply(lambda x: x["signal"]["depth"].max(),axis=1) > 30] #drop floods with max depth > 30 
-
-# =============================================================================
-# STEP 3: smooth floods and cut into rising/falling segments
-# =============================================================================
-x = flood_df.loc[4066145]
-uuid = x.name
-signal = pd.DataFrame(x.signal)
-std = np.std((signal["depth"] - signal["depth"].mean())/signal["depth"].max())*signal["depth"].max()
-smooth = signal.rolling(window=len(signal)//10, win_type="gaussian",center=True).mean(std=std)
-ggplot(signal,aes(x="time",y="depth")) + geom_line(alpha=0.6) + geom_line(smooth,aes(x="time",y="depth"),color="skyblue",alpha=0.9)
 
 # =============================================================================
 # STEP 3: remove outliers
@@ -64,10 +50,57 @@ def remove_outliers(x,thresh):
         d = d[~mask]
         x.signal={"time":t,"depth":d}
     return x.signal
-flood_df["signal_smt"] = flood_df.apply(lambda x: remove_outliers(x,2),axis=1)
+
+flood_df_mod = flood_df.copy(deep=True)
+flood_df_mod["signal"] = flood_df_mod.apply(lambda x: remove_outliers(x,2),axis=1)
 
 # =============================================================================
-# STEP 3: generate simulated floods at all the durations and append onto dataframe
+# STEP 4: locate peaky floods and drop 
+# =============================================================================
+flood_df_mod["mean_diff"] = flood_df_mod["signal"].apply(lambda x: np.abs(np.diff(x["depth"])).mean())
+flood_df_mod = flood_df_mod.loc[flood_df_mod.mean_diff < 65]
+
+flood_df_long = wide_to_long(flood_df_mod,["duration","mean_diff"],"signal")
+ggplot(flood_df_long.reset_index(),aes(x="t_pct",y="depth",group="uuid",color="mean_diff")) + geom_line(alpha = 0.6) 
+
+# =============================================================================
+# STEP 5: drop the manually identified suspect floods 
+# =============================================================================
+ugly_flood = [8612524, 3230015]
+suspect_floods = [2860240, 1929133]
+
+flood_df_mod_filt = flood_df_mod.drop(suspect_floods + ugly_flood)
+flood_df_long_filt = wide_to_long(flood_df_mod_filt,["duration","mean_diff"],"signal")
+
+ggplot(flood_df_long_filt.reset_index(),aes(x="t_pct",y="depth",group="uuid")) + geom_line(alpha = 0.6) 
+
+# =============================================================================
+# STEP 5: smooth floods and cut into rising/falling segments
+# =============================================================================
+def smooth_and_cleave(ev):
+    x = ev.copy(deep=True)
+    signal = pd.DataFrame(x.signal)
+    
+    std = np.std((signal["depth"] - signal["depth"].mean())/signal["depth"].max())*signal["depth"].max()
+    smooth = signal.rolling(window=len(signal)//5, win_type="gaussian",center=True).mean(std=std)
+    cleave_ind = np.argwhere(smooth["depth"] == smooth["depth"].max()).flatten().min()
+    
+    rise = signal[:cleave_ind].to_dict(orient='list')
+    fall = signal[cleave_ind:].to_dict(orient='list')
+    
+    smooth = smooth.to_dict(orient='list')
+   
+    
+    return pd.Series({"smooth":smooth, "rise":rise,"fall":fall, "inflection_t":signal["time"][cleave_ind]})
+flood_df_sim = flood_df_mod_filt.copy(deep=True)
+flood_df_sim[["smooth","rise","fall","inflection_t"]] = flood_df_sim.apply(lambda x: smooth_and_cleave(x),axis=1)
+
+flood_df_sim_long = wide_to_long(flood_df_sim,["duration","inflection_t"],"signal")
+flood_df_sim_long.loc[(flood_df_sim_long.time > flood_df_sim_long.inflection_t),"acc"] = "fall"
+flood_df_sim_long.loc[(flood_df_sim_long.time <= flood_df_sim_long.inflection_t),"acc"] = "rise"
+
+# =============================================================================
+# STEP 6: generate simulated floods for rising/falling action at all durations as an average of all flood samples
 # =============================================================================
 def generate_simulated_flood(x,signal_name):
     duration = x.duration
@@ -76,8 +109,8 @@ def generate_simulated_flood(x,signal_name):
     t_sim = np.arange(duration)*60
     return {"time":t_sim,"depth":depth_sim}
 
-flood_df["signal_sim"] = flood_df.apply(lambda x: generate_simulated_flood(x,"signal_smt"),axis=1)
-#flood_df["signal_sim"] = 
+
+
 # =============================================================================
 # STEP 4: get time step comparison of measured depth and simulated depth
 # =============================================================================
