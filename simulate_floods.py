@@ -15,6 +15,7 @@ import glob
 import ast
 import math
 from plotnine import *
+from scipy.optimize import fmin 
 
 def wide_to_long(df,cols_to_keep, cols_to_expand):
     df_exp = pd.DataFrame(df[cols_to_expand].to_list(),index = df.index)
@@ -102,94 +103,85 @@ flood_df_sim_long.loc[(flood_df_sim_long.time <= flood_df_sim_long.inflection_t)
 # =============================================================================
 # STEP 6: generate simulated floods for rising/falling action at all durations as an average of all flood samples
 # =============================================================================
-def generate_simulated_flood(x,signal_name):
-    duration = x.duration
-    peak = x[signal_name]["depth"].max()
-    depth_sim = fake_data.flood(duration=duration, a=0.7, c=1.7, peak=peak, power=1., noise=0.)
-    t_sim = np.arange(duration)*60
-    return {"time":t_sim,"depth":depth_sim}
+flood_simulate_df = pd.DataFrame(flood_df_sim["smooth"].to_list(),index = flood_df_sim.index).rename(columns={"time":"time.smooth","depth":"depth.smooth"}).join(flood_df_sim[["inflection_t","duration"]]).explode(["time.smooth","depth.smooth"]).astype({"time.smooth":"float","depth.smooth":"float"})
+flood_simulate_df["t_pct"] = (flood_simulate_df["time.smooth"]/(flood_simulate_df["duration"]*60)).astype("float")
+flood_simulate_df.loc[(flood_simulate_df["time.smooth"] >= flood_simulate_df.inflection_t),"acc"] = "fall"
+flood_simulate_df.loc[(flood_simulate_df["time.smooth"] < flood_simulate_df.inflection_t),"acc"] = "rise"
 
+flood_measure_df =pd.DataFrame(flood_df_sim["signal"].to_list(),index = flood_df_sim.index).join(flood_df_sim[["inflection_t","duration"]]).explode(["time","depth"]).astype({"time":"float","depth":"float"})
+flood_measure_df["t_pct"] = (flood_measure_df["time"]/(flood_measure_df["duration"]*60)).astype("float")
+flood_measure_df.loc[(flood_measure_df.time >= flood_measure_df.inflection_t),"acc"] = "fall"
+flood_measure_df.loc[(flood_measure_df.time < flood_measure_df.inflection_t),"acc"] = "rise"
 
+#plot drainage profiles and save them for later use 
+flood_uuids = flood_df_sim.index.values
+i = flood_uuids[30]
+for i in flood_uuids:
+    p = ggplot(flood_simulate_df.loc[i],aes(x = "t_pct", y = "depth.smooth",color="acc")) + geom_line(linetype="dashed") + \
+        geom_line(flood_measure_df.loc[i],aes(x = "t_pct",y = "depth",color="acc"),linetype="solid") +\
+        labs(x = "t_pct", y = "depth", title = "Depth Filtered and Smoothed UUID: %s"%(i))    
+    ggsave(p,filename="/Users/tanvibansal/Documents/GitHub/ptsa_project/flood_drainage_tuning/%s.png"%(i),format="png")
 
-# =============================================================================
-# STEP 4: get time step comparison of measured depth and simulated depth
-# =============================================================================
+#fit a gamma distribution to each flood, grab the drainage profiles, estimate error, and train params to minimize drainage errors
+x = flood_simulate_df.loc[i]
 
-flood_measure_df = pd.DataFrame(flood_df["signal_smt"].to_list(),index=flood_df.index)
-flood_measure_df['time'] = flood_measure_df.time.apply(lambda x: np.round(x/60))
-flood_measure_df = flood_measure_df.explode(["time","depth"]).astype({"time":"int","depth":"float"}).reset_index().set_index(["uuid","time"])
-
-flood_simulate_df = pd.DataFrame(flood_df["signal_sim"].to_list(),index=flood_df.index)
-flood_simulate_df['time'] = flood_simulate_df.time.apply(lambda x: np.round(x/60))
-flood_simulate_df = flood_simulate_df.explode(["time","depth"]).astype({"time":"int","depth":"float"}).reset_index().set_index(["uuid","time"])
-
-noise_est_df = flood_simulate_df.join(flood_measure_df,how="left",lsuffix=".sim",rsuffix=".meas")
-
-# =============================================================================
-# STEP 5: estimate noise between measured and simulated for each event
-# =============================================================================
-measurement_error = noise_est_df.dropna()
-measurement_error.loc[:,"error"] = (measurement_error.loc[:,"depth.sim"] - measurement_error.loc[:,"depth.meas"]).rename("error")
-
-event_error = measurement_error.reset_index().groupby("uuid").agg(rmse = ('error', lambda x: (x**2).mean())).sort_values(by="rmse",ascending=False)
-event_error["pct_rank"] = event_error["rmse"].rank(pct=True)
-
-# =============================================================================
-# STEP 6: plot 
-# =============================================================================
-plt.hist(event_error["rmse"],bins=30)
-plt.xlabel("Mean Event RMSE")
-plt.title("Distribution of Flood Event RMSE between Simulated and Measured")
-
-for i in range(len(event_error)):
-    e = event_error.iloc[i]
-    uuid = e.name
-    pct = e.pct_rank 
-    rmse = e.rmse
+def fit_drainage_profile(ev, a, c):
+    x = ev.copy(deep=True).dropna()
+    duration = round(x['time.smooth'].iloc[-1]) + 1
+    peak = x['depth.smooth'].max()
     
-    p = ggplot(measurement_error.loc[uuid].reset_index(),aes(x="time",y="depth.meas",group="uuid")) + geom_line()  + \
-        geom_line(aes(x = "time",y="depth.sim"),color="grey") + labs(title="Simulated vs Measured Flood Depth\nrmse = %s, pct_rank_rmse = %s"%(round(rmse,2), pct))
+    depth_sim = fake_data.flood(duration=duration, a=a, c=c, peak=peak, power=1., noise=0.)
+    depth_sim = depth_sim[x['time.smooth'].round().values.astype("int")]
+    
+    #normalize smoothed and simulate depths and grab their drainage profiles
+    if (x.acc == "fall").sum() > 0:
+        drainage_start_ind = np.argwhere(x['time.smooth'] >= x.inflection_t).min()
+        depth_smooth_drain = x["depth.smooth"].iloc[drainage_start_ind:].values
+        depth_sim_drain = depth_sim[drainage_start_ind:]
         
-    ggsave(p,filename="/Users/tanvibansal/Documents/GitHub/ptsa_project/flood_simulation_tuning/%s.png"%(uuid),format="png")
-x = flood_df.copy(deep=True).loc[5190612]
-d = x["signal"]['depth']
-d[np.abs((d - d.mean())/d.std()) > 2]
-#explore taking out long runs of same vals from 
-
-x = measurement_error.copy(deep=True).loc[4152648]
-def find_runs(x):
+        #estimate rmse between fit profile and measured
+        rmse = np.sqrt(np.sum((depth_smooth_drain - depth_sim_drain)**2)/(len(depth_smooth_drain)*peak))
     
-    """Find runs of consecutive items in an array."""
+        return rmse
 
-    # ensure array
-    x = np.asanyarray(x)
-    if x.ndim != 1:
-        raise ValueError('only 1D array supported')
-    n = x.shape[0]
+def optimize_drainage_profile(params, flood_simulate_df):
+    a = params[0]
+    c = params[1]
+    x_rmse = []
+    for i in flood_simulate_df.index.unique().values:
+        ev = flood_simulate_df.loc[i].copy(deep=True)
+        rmse = fit_drainage_profile(ev, a, c)
+        if rmse:
+            x_rmse.append(rmse)
+    return np.sum(np.array(x_rmse))
 
-    # handle empty array
-    if n == 0:
-        return np.array([]), np.array([]), np.array([])
+gamma_train = fmin(optimize_drainage_profile, np.array([50,1]), args=(flood_simulate_df,))
+optimize_drainage_profile(gamma_train, flood_simulate_df)
 
-    else:
-        # find run starts
-        loc_run_start = np.empty(n, dtype=bool)
-        loc_run_start[0] = True
-        np.not_equal(x[:-1], x[1:], out=loc_run_start[1:])
-        run_starts = np.nonzero(loc_run_start)[0]
+# =============================================================================
+# STEP 7: using the optimized parameters simulate floods for each event, cleave into rising/falling, and output to csv
+# =============================================================================
 
-        # find run values
-        run_values = x[loc_run_start]
+def simulate_floods(params, ev):
+    a = params[0]
+    c = params[1]
+    
+    x = ev.copy(deep=True).dropna()
+    time = x['signal']['time']
+    duration = round(time[-1]) + 1
+    peak = x['signal']['depth'].max()
+    inflection_t = x['inflection_t']
+    
+    depth_sim = fake_data.flood(duration=duration, a=a, c=c, peak=peak, power=1., noise=0.)
+    depth_sim = depth_sim[time]
+    
+    signal_sim = {"time": time, "depth": depth_sim}
+    signal_rise = {"time": time[0:inflection_t], "depth": depth_sim[0:inflection_t]}
+    signal_fall = {"time": time[inflection_t:], "depth": depth_sim[inflection_t:]}
+    
+    return pd.Series({"signal_sim":signal_sim, "signal_rise":signal_rise, "signal_fall":signal_fall})
+flood_df_out = flood_df_sim.copy(deep=True)[["deployment_id","label","signal","inflection_t"]]
+flood_df_out[["signal_sim","signal_sim_rise","signal_sim_fall"]] = flood_df_out.apply(lambda ev: simulate_floods(gamma_train, ev),axis=1)
+    
+    
 
-        # find run lengths
-        run_lengths = np.diff(np.append(run_starts, n))
-
-        return run_values, run_starts, run_lengths
-flood_df.apply(lambda x: find_runs(x.signal["depth"]),axis=1)
-
-run_values, run_starts, run_lengths = find_runs(x["depth.meas"])
-
-run_lengths[run_lengths > 5]
-run_starts[run_lengths > 5]
-
-ggplot(x.reset_index(),aes(x="time",y="depth.meas")) + geom_line()
