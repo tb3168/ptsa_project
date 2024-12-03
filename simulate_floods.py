@@ -158,10 +158,10 @@ def optimize_drainage_profile(params, flood_simulate_df):
 gamma_train = fmin(optimize_drainage_profile, np.array([50,1]), args=(flood_simulate_df,))
 optimize_drainage_profile(gamma_train, flood_simulate_df)
 
+
 # =============================================================================
 # STEP 7: using the optimized parameters simulate floods for each event, cleave into rising/falling, and output to csv
 # =============================================================================
-
 def simulate_floods(params, ev):
     a = params[0]
     c = params[1]
@@ -171,17 +171,31 @@ def simulate_floods(params, ev):
     duration = round(time[-1]) + 1
     peak = x['signal']['depth'].max()
     inflection_t = x['inflection_t']
+    inflection_t_ind = np.argwhere(time == inflection_t).flatten().item()
     
     depth_sim = fake_data.flood(duration=duration, a=a, c=c, peak=peak, power=1., noise=0.)
     depth_sim = depth_sim[time]
     
     signal_sim = {"time": time, "depth": depth_sim}
-    signal_rise = {"time": time[0:inflection_t], "depth": depth_sim[0:inflection_t]}
-    signal_fall = {"time": time[inflection_t:], "depth": depth_sim[inflection_t:]}
+    signal_rise = {"time": time[0:inflection_t_ind], "depth": depth_sim[0:inflection_t_ind]}
+    signal_fall = {"time": time[inflection_t_ind:], "depth": depth_sim[inflection_t_ind:]}
     
     return pd.Series({"signal_sim":signal_sim, "signal_rise":signal_rise, "signal_fall":signal_fall})
 flood_df_out = flood_df_sim.copy(deep=True)[["deployment_id","label","signal","inflection_t"]]
 flood_df_out[["signal_sim","signal_sim_rise","signal_sim_fall"]] = flood_df_out.apply(lambda ev: simulate_floods(gamma_train, ev),axis=1)
     
-    
+flood_df_long = flood_df_out.apply(lambda x: pd.Series({"time":x["signal"]['time'], "depth": x["signal"]["depth"], "depth_sim":x["signal_sim"]["depth"]}),axis=1).explode(["time","depth","depth_sim"]).astype({"time":"int","depth":"float","depth_sim":"float"})
+
+i = flood_uuids[2]
+plot_df = flood_df_long.loc[i]
+ggplot(plot_df,aes(x="time",y="depth")) + geom_line(alpha=0.5) + geom_line(aes(x = "time",y="depth_sim"),color="blue",alpha=0.5,linetype="dashed")
+
+# =============================================================================
+# STEP 8: using the optimized parameters simulate floods for each event, cleave into rising/falling, and output to csv
+# ============================================================================
+
+
+flood_df_out.to_pickle("/Users/tanvibansal/Documents/GitHub/ptsa_project/flood_simulations")
+
+
 
