@@ -114,3 +114,6 @@ event_eval = sample_eval.copy(deep=True)
 event_eval["filt"] = (event_eval["acc"] > 0.5).astype("int")
 event_eval.filt.value_counts()
 event_eval.filt.describe()
+
+flood_df = pd.read_pickle("/Users/tanvibansal/Documents/GitHub/ptsa_project/flood_df")
+flood_df.iloc[30].signal
