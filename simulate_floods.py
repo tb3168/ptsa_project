@@ -20,21 +20,47 @@ event_df = pd.read_pickle("/Users/tanvibansal/Documents/GitHub/flood-filters/flo
 flood_df = event_df.loc[event_df.label == "flood"]
 
 # =============================================================================
-# generate simulated data
+# zero pad true  data before smoothing 
 # =============================================================================
 signal = flood_df.signal
+
+def zero_pad_signal(signal,N):
+    time = signal["time"]
+    depth = signal["depth"]
+    #create the timestamps for the front padding and back padding (not adjusting for negative times yet)
+    t_pad_buffer = np.arange(1,(N+1))*60
+    t_pad_before = np.array([time[0] - i for i in t_pad_buffer[::-1]])
+    t_pad_after = np.array([time[-1] + i for i in t_pad_buffer])
+    
+    #concatenate the front padding timetamps, existing, and the back padding timestamps into an array. then shift them so that the first time stamp is 0
+    t_pad = np.concatenate([t_pad_before, time, t_pad_after])
+    t_pad_adj = time[0] - t_pad[0] 
+    t_pad = t_pad + t_pad_adj
+    
+    #create the 0 padding before to concat onto the front and back of the depth array 
+    d_pad_buffer = np.zeros(N)
+    d_pad = np.concatenate([d_pad_buffer, depth, d_pad_buffer])
+    
+    return {"time":t_pad, "depth": d_pad}
+
+signal_padded = signal.apply(lambda x: zero_pad_signal(x, 5))
+
+# =============================================================================
+# generate simulated data
+# =============================================================================
+
 # z-score remove outliers
 def remove_outliers(x,thresh):
-    t = x.signal["time"]
-    d = x.signal["depth"]
+    t = x["time"]
+    d = x["depth"]
     z_scores = (d - d.mean())/d.std()
     mask = (np.abs(z_scores) > thresh)
     if mask.sum() > 0:
-        t = t[~mask]
-        d = d[~mask]
-        x.signal={"time":t,"depth":d}
-    return x.signal
-signal_outliers_rm = flood_df.apply(lambda x: remove_outliers(x,2),axis=1)
+        #t = t[~mask]
+        d[mask] = np.mean(d)
+        x={"time":t,"depth":d}
+    return x
+signal_outliers_rm = signal_padded.apply(lambda x: remove_outliers(x,2))
 
 # smooth 
 def smooth(signal):
@@ -86,26 +112,7 @@ signal_simulated = signal_smooth.apply(lambda x: generate_flood_profile(x,gamma_
 # zero pad true and simulated data
 # =============================================================================
 
-def zero_pad_signal(signal,N):
-    time = signal["time"]
-    depth = signal["depth"]
-    #create the timestamps for the front padding and back padding (not adjusting for negative times yet)
-    t_pad_buffer = np.arange(1,(N+1))*60
-    t_pad_before = np.array([time[0] - i for i in t_pad_buffer[::-1]])
-    t_pad_after = np.array([time[-1] + i for i in t_pad_buffer])
-    
-    #concatenate the front padding timetamps, existing, and the back padding timestamps into an array. then shift them so that the first time stamp is 0
-    t_pad = np.concatenate([t_pad_before, time, t_pad_after])
-    t_pad_adj = 0 - t_pad[0] 
-    t_pad = t_pad + t_pad_adj
-    
-    #create the 0 padding before to concat onto the front and back of the depth array 
-    d_pad_buffer = np.zeros(N)
-    d_pad = np.concatenate([d_pad_buffer, depth, d_pad_buffer])
-    
-    return {"time":t_pad, "depth": d_pad}
-
-signal_padded = signal.apply(lambda x: zero_pad_signal(x, 5))
+signal_padded = signal_padded.apply(lambda x: zero_pad_signal(x, 5))
 signal_sim_padded = signal_simulated.apply(lambda x: zero_pad_signal(x, 5))
 
 # =============================================================================
