@@ -34,7 +34,7 @@ def apply_kalman_filter(observations):
 def apply_kalman_filter_3d(times, observations):
     global_params = pd.read_pickle("/Users/tanvibansal/Documents/GitHub/ptsa_project/global_params.pkl")
      
-    time_diffs = (np.diff(times, prepend=times[0])/1000000000).astype("int")  # Compute time gaps with 0 for the first element
+    time_diffs = np.diff(times)#(np.diff(times, prepend=times[0])/1000000000).astype("int")  # Compute time gaps with 0 for the first element
 
     # Initialize state and covariance matrices
     n_observations = len(observations)

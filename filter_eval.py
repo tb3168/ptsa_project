@@ -13,6 +13,7 @@ import glob
 from run_kalman import apply_kalman_filter, apply_kalman_filter_3d
 from plotnine import *
 from pandarallel import pandarallel 
+from particle_filter import run_particle_filter
 
 root_fp = "/Users/tanvibansal/Documents/GitHub/flood-filters/flood_filters/"
 data_fp = root_fp + "data-1015/"
@@ -48,8 +49,8 @@ def evaluate_filter(s, data_fp, thresh):
             filtered = data["depth_proc_mm"].values
             return filtered
         #filtered =  get_heuristic_filtered_signal(data)
-        filtered = apply_kalman_filter_3d(time.values, measured)
-        
+#        filtered = apply_kalman_filter_3d(time.values, measured)
+        filtered = run_particle_filter(time.values, measured, 2000)
         #find percent change between unfiltered and filtered depths for each point and mark as filtered if greater than thresh
         def get_filtered_indicator(measured, filtered, thresh):
             pct_change = np.empty((len(measured),),dtype="float")
