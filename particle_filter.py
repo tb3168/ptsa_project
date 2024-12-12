@@ -12,22 +12,23 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats as stats
 
+
 def observation_probability(latent: np.ndarray, observation: np.ndarray) -> float:
 
     # evaluate the likelihood of the observed position based on the latent position
     # 0.5 probability that the observation is noise, 0.5 probability that the observation is a flood
-    p = np.random.rand()
+    #p = np.random.rand()
     evaluation_mean = latent[0]
-    if p < 0.7: 
+    if all(latent == np.array([0,0,0])): 
         likelihood = stats.norm.pdf(observation, loc = 0, scale = 1)
+        #likelihood = stats.uniform.pdf(observation, loc = 0, scale = observation)
     else:
-        likelihood = stats.gamma.pdf(observation, 0.288, loc=evaluation_mean, scale=1)
+        likelihood = stats.gamma.pdf(observation, 0.288, loc=evaluation_mean, scale=7)
         #likelihood = stats.norm.pdf(observation, loc = evaluation_mean, scale = 1)
     return likelihood
 
 def latent_sample(delta_t, latent: np.ndarray,observation) -> np.ndarray:
 
-    # Let's keep things somewhat 'simple' by making our distribution a sum of Gaussians
     transition_matrix = np.array([
         [1, delta_t, 0.5 * delta_t**2],
         [0, 1, delta_t] ,
@@ -66,7 +67,8 @@ def run_particle_filter(t, observations,n_samples):
     z_samples[0] = np.array([np.random.uniform(0,.01, size = n_samples), np.random.uniform(-.5,.5, size = n_samples),np.random.uniform(-.01,.01, size = n_samples) ]).T
     weights[0] = np.ones((n_samples))*(1/n_samples) 
     
-    dts = np.diff(t,prepend=t[0])#(np.diff(t, prepend=t[0])/1000000000).astype("int")
+   # dts = np.diff(t,prepend=t[0])
+    dts = (np.diff(t, prepend=t[0])/1000000000).astype("int")
     # Now let's start our particle filtering loop.
     for time in range(1,len(observations)+1):
             # Sample from the next latent state given the current latent state.
